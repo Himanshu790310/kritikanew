@@ -2,6 +2,9 @@ import os
 import logging
 import asyncio
 import signal
+from threading import Thread
+from fastapi import FastAPI
+import uvicorn
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram import Update
 import google.generativeai as genai
@@ -9,34 +12,50 @@ from google.cloud import secretmanager
 import google.cloud.logging
 
 # ======================
+# FASTAPI HEALTH CHECK
+# ======================
+app = FastAPI()
+
+@app.get("/")
+async def health_check():
+    return {"status": "healthy", "service": "english-teaching-bot"}
+
+@app.get("/ready")
+async def readiness_check():
+    return {"ready": True}
+
+def run_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
+
+async def start_http_server():
+    Thread(target=run_fastapi, daemon=True).start()
+
+# ======================
 # LOGGING CONFIGURATION
 # ======================
 try:
-    # Set up Google Cloud Logging
     logging_client = google.cloud.logging.Client()
     logging_client.setup_logging()
+    logger = logging.getLogger('EnglishTeachingBot')
+    logger.setLevel(logging.INFO)
 except Exception as e:
-    print(f"Could not set up Cloud Logging: {e}")
-
-# Configure basic logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger('EnglishTeachingBot')
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
+    logger = logging.getLogger('EnglishTeachingBot')
+    logger.warning(f"Could not set up Cloud Logging: {e}")
 
 # ======================
 # CONFIGURATION MANAGER
 # ======================
 class Config:
     def __init__(self):
-        self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
-        if not self.PROJECT_ID:
-            raise ValueError("GOOGLE_CLOUD_PROJECT environment variable not set")
-        
+        self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id")
         self.TELEGRAM_BOT_TOKEN = self._get_secret("TELEGRAM_BOT_TOKEN")
         self.GOOGLE_API_KEY = self._get_secret("GOOGLE_API_KEY")
         self._validate_config()
+        logger.info("Configuration loaded successfully")
 
     def _get_secret(self, secret_name):
         """Retrieve secrets from Google Secret Manager or environment variables"""
@@ -51,7 +70,7 @@ class Config:
             client = secretmanager.SecretManagerServiceClient()
             name = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
             response = client.access_secret_version(name=name)
-            logger.info(f"Successfully retrieved {secret_name} from Secret Manager")
+            logger.info(f"Retrieved {secret_name} from Secret Manager")
             return response.payload.data.decode("UTF-8")
         except Exception as e:
             logger.error(f"Failed to access secret {secret_name}: {e}")
@@ -63,12 +82,9 @@ class Config:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         if not self.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY is required")
-        logger.info("Configuration validation successful")
 
-# Initialize configuration
 try:
     config = Config()
-    logger.info("Configuration initialized successfully")
 except Exception as e:
     logger.critical(f"Configuration failed: {e}")
     raise
@@ -93,75 +109,90 @@ SAFETY_SETTINGS = [
 ]
 
 SYSTEM_INSTRUCTION = """
-# Role: Kritika - Friendly English Doubt Solver for Hindi Speakers
+# Role: Kritika - The Perfect English Teacher for Hindi Speakers
 
 ## Core Identity:
-You are Kritika, Himanshu's teaching assistant specializing in helping Hindi speakers with English. Your personality:
-- Warm and encouraging like a favorite elder sister
+You are Kritika, an AI English teacher specializing in teaching Hindi speakers through Hinglish. Your personality is:
+- Warm and encouraging like a favorite teacher
 - Patient and clear in explanations
 - Culturally aware of Indian contexts
-- Focused on practical language help
-
-## Primary Functions:
-1. *Doubt Solving*:
-   - Explain grammar concepts in simple Hinglish
-   - Help with translations (Hindi ↔ English)
-   - Clarify vocabulary and phrases
-   - Provide examples from daily Indian life
-
-2. *Teaching Support*:
-   - Assist Himanshu's students with their questions
-   - Break down complex concepts into easy steps
-   - Create quick practice exercises when requested
-
-## Communication Style:
-- *Language Preference*: 
-   - 90% Hindi (Roman script) + 10% English
-   - Examples: "Present perfect tense ko samjhiye...", "Is sentence mein error kya hai?"
-- *Tone*: 
-   - Friendly and supportive: "Chinta mat karo, main hoon na!"
-   - Encouraging: "Aapne bahut accha try kiya!"
-   - Respectful: "Aapka sawal accha hai..."
+- Strict about proper English but gentle in corrections
 
 ## Teaching Methodology:
-1. *Concept Explanation*:
-   - Hindi explanation first (Roman script)
-   - English structure/formula
-   - 2-3 simple examples
-   - Contrast with Hindi structure
+1. **Concept Explanation**:
+   - Give Hindi explanation (Roman script)
+   - Show English structure/formula
+   - Provide 5 simple examples
+   - Contrast with Hindi sentence structure
 
-2. *Error Correction*:
-   - Gently point out mistakes: "Yahan thoda sa correction chahiye..."
-   - Show correct version: "Shayad aap ye kehna chahte the..."
-   - Always provide reasoning: "Kyuki plural subject ke saath 'are' aata hai"
+2. **Error Correction**:
+   - Never say "Wrong!" - instead: "Good try! More accurately we say..."
+   - Highlight mistakes gently: "Yahan 'has' ki jagah 'have' aayega because..."
+   - Always provide corrected version
 
-3. *Practical Help*:
-   - Real-life usage examples
-   - Short practice exercises (only when asked)
-   - Pronunciation tips with Hindi phonetics
+3. **Practical Help**:
+   - Real-life Indian context examples
+   - Pronunciation guides with Hindi phonetics
+   - Short practice exercises when requested
+
+## Communication Style:
+- **Language Preference**:
+  - If question in Hindi → Reply in Hinglish (90% Hindi + 10% English)
+  - If question in English → Reply in English
+  - Example: "Present perfect tense mein hum 'has/have' ke saath verb ka third form use karte hai"
+
+- **Tone**:
+  - Encouraging: "Bahut accha attempt! Thoda sa correction..."
+  - Supportive: "Chinta mat karo, practice se perfect hoga!"
+  - Respectful: "Aapka sawal bahut relevant hai"
 
 ## Special Features:
-- *Instant Help*: 
+1. **Instant Help**:
    - When user says "help" or "samjhao":
      1. Simplify concept
-     2. Give 2 relatable examples
-     3. Offer alternative explanations
-     
-- *Cultural Connection*:
-   - Use Indian examples: "Jaise ki 'I'm going to market' ki jagah 'I'm going to the market' bolna sahi hai"
+     2. Give 3 basic examples
+     3. Offer alternative explanation
+
+2. **Cultural Adaptation**:
+   - Use Indian examples: "Jaise hum 'I am going to mandir' ke jagah 'I am going to the temple' kahenge"
    - Explain Western concepts in Indian context
 
 ## Prohibitions:
-- No fixed curriculum or daily tasks
 - No word-for-word translations
 - No romantic/political/religious examples
 - Don't overwhelm with information
+- Never use complex English to explain basics
 
-## Interaction Principles:
-- Prioritize user's immediate needs
-- Keep responses conversational and personal
-- Use emojis sparingly (👍✨💡)
-- Always end with: "Aur koi doubt hai?" or "Mai aur madad kar sakti hoon?"
+## Response Format:
+1. Start with greeting if new conversation
+2. Explain concept in simple steps
+3. Provide examples
+4. End with:
+   - "Aur koi doubt hai?"
+   - "Mai aur madad kar sakti hoon?"
+5. Use emojis sparingly (💡 for tips, ✨ for encouragement)
+
+## Example Interactions:
+User: "Present perfect tense samjhao"
+Response: """
+Namaste! 🙏 Present perfect tense ke baare mein samjha deti hoon:
+
+1. Concept: Ye tense batata hai ki koi action past mein shuru hua aur uska effect present tak hai.
+
+2. Structure:
+   Subject + has/have + verb ka 3rd form
+
+3. Examples:
+   - Mai Delhi gaya hoon (I have gone to Delhi)
+   - Usne khana kha liya hai (She has eaten food)
+   - Humne movie dekh li hai (We have watched the movie)
+
+4. Hindi Comparison:
+   Hindi mein hum "cha hai", "liya hai" ka use karte hai
+   English mein "have/has" + verb ka 3rd form
+
+Koi aur doubt hai? 💡
+"""
 """
 
 try:
@@ -188,13 +219,13 @@ class ConversationManager:
         async with self.lock:
             if chat_id not in self.conversations:
                 self.conversations[chat_id] = model.start_chat(history=[])
-                logger.info(f"Started new chat session for {chat_id}")
+                logger.info(f"New chat session started for {chat_id}")
             return self.conversations[chat_id]
 
     async def cleanup(self):
         async with self.lock:
             self.conversations.clear()
-            logger.info("Cleared all conversation sessions")
+            logger.info("All conversation sessions cleared")
 
 conversation_manager = ConversationManager()
 
@@ -208,14 +239,13 @@ async def start(update: Update, context):
         await conversation_manager.get_chat(chat_id)
         
         welcome_msg = (
-            f"Namaste {user.first_name}! 🙏\n"
-            "Main Kritika hoon - Himanshu sir ki teaching assistant.\n\n"
-            "Aap mujhse poochh sakte hain:\n"
-            "• English grammar ke sawal\n"
-            "• Translation help (Hindi ↔ English)\n"
-            "• Vocabulary doubts\n"
-            "• Aur bhi koi bhi English-related problem!\n\n"
-            "Bas apna doubt bhejiye... Main poori koshish karungi aapki madad karne ki! 💪"
+            f"Namaste {user.first_name}! 🙏\n\n"
+            "Main Kritika hoon - aapki personal English teacher.\n\n"
+            "Mujhse aap poochh sakte hain:\n"
+            "• Grammar concepts\n• Sentence corrections\n• Translations\n"
+            "• Vocabulary doubts\n• Pronunciation help\n\n"
+            "Koi bhi English-related problem ho, bas message kijiye!\n\n"
+            "Chaliye shuru karte hain... Aaj aap kya seekhna chahenge? 💡"
         )
         await update.message.reply_text(welcome_msg)
         logger.info(f"Sent welcome message to {chat_id}")
@@ -223,7 +253,7 @@ async def start(update: Update, context):
         logger.error(f"Error in start handler: {e}", exc_info=True)
         if update.effective_chat:
             await update.effective_chat.send_message(
-                "Kuch technical problem aa gayi hai. Hum team ko inform kar diya hai."
+                "Kuch technical problem aa gayi hai. Kripya thodi der baad try karein."
             )
 
 async def handle_message(update: Update, context):
@@ -235,30 +265,40 @@ async def handle_message(update: Update, context):
         return
 
     try:
-        logger.info(f"Processing message from {chat_id}: {user_message[:50]}...")
+        logger.info(f"Processing message from {chat_id}: {user_message[:100]}...")
         chat = await conversation_manager.get_chat(chat_id)
         response = chat.send_message(user_message)
         
         if response.text:
             await update.message.reply_text(response.text)
-            logger.info(f"Sent response to {chat_id}")
+            logger.info(f"Response sent to {chat_id}")
         else:
             logger.error(f"Empty response from Gemini for {chat_id}")
-            await update.message.reply_text("Maaf kijiye, main samjha nahi. Phir se try karein?")
+            await update.message.reply_text(
+                "Maaf karna, main samjha nahi. Kya aap phir se try kar sakte hain?\n\n"
+                "Ya phir aap 'help' likh kar mujhe bata sakte hain ki aapko kis cheez mein difficulty aa rahi hai."
+            )
             
     except Exception as e:
         logger.error(f"Error handling message for {chat_id}: {e}", exc_info=True)
         if update.effective_chat:
             await update.effective_chat.send_message(
-                "Kuch technical problem aa raha hai. Thodi der baad try karein."
+                "Kuch technical problem aa raha hai. Hum team ko inform kar diya hai.\n\n"
+                "Kripya kuch samay baad phir try karein. Dhanyavaad! 🙏"
             )
 
 async def error_handler(update: Update, context):
-    logger.error(f"Update {update} caused error: {context.error}", exc_info=True)
+    error = context.error
+    logger.error(f"Telegram error: {error}", exc_info=True)
+    
     if update and update.effective_chat:
-        await update.effective_chat.send_message(
-            "Kuch technical problem aa gayi hai. Hum team ko inform kar diya hai."
-        )
+        try:
+            await update.effective_chat.send_message(
+                "Kuch technical problem aa gayi hai. Hum ise fix kar rahe hain.\n\n"
+                "Kripya thodi der baad phir try karein. Dhanyavaad! 🙏"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error message: {e}")
 
 # ======================
 # APPLICATION MANAGEMENT
@@ -290,7 +330,7 @@ class BotApplication:
     async def shutdown(self):
         if self.running:
             try:
-                logger.info("Starting shutdown sequence...")
+                logger.info("Starting graceful shutdown...")
                 await conversation_manager.cleanup()
                 
                 if self.application:
@@ -329,17 +369,25 @@ class BotApplication:
 # MAIN EXECUTION
 # ======================
 async def main():
-    bot = BotApplication()
     try:
+        # Start HTTP server for health checks
+        await start_http_server()
+        logger.info("HTTP health check server started")
+        
+        # Initialize and run bot
+        bot = BotApplication()
         await bot.initialize()
+        logger.info("Bot is now running")
         await bot.run_forever()
+        
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
     finally:
-        if bot.running:
+        if 'bot' in locals() and bot.running:
             await bot.shutdown()
+        logger.info("Application shutdown complete")
 
 if __name__ == '__main__':
     try:
