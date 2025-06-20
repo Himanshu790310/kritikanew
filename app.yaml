@@ -1,0 +1,11 @@
+runtime: python39
+service: english-teaching-bot
+entrypoint: python main.py
+
+instance_class: F1
+automatic_scaling:
+  min_instances: 1
+  max_instances: 3
+
+env_variables:
+  GOOGLE_CLOUD_PROJECT: your-project-id
