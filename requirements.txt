@@ -1,0 +1,8 @@
+python-telegram-bot==20.3
+google-generativeai==0.3.2
+google-cloud-secret-manager==2.16.1
+google-cloud-logging==3.8.0
+fastapi==0.95.2
+uvicorn==0.22.0
+aiohttp==3.9.3
+python-dotenv==1.0.0
