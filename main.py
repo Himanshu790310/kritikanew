@@ -1,24 +1,33 @@
 import os
 import logging
 import asyncio
+import signal
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram import Update
 import google.generativeai as genai
 from google.cloud import secretmanager
 import google.cloud.logging
 
-# --- Cloud Logging Setup ---
-client = google.cloud.logging.Client()
-client.setup_logging()
+# ======================
+# LOGGING CONFIGURATION
+# ======================
+try:
+    # Set up Google Cloud Logging
+    logging_client = google.cloud.logging.Client()
+    logging_client.setup_logging()
+except Exception as e:
+    print(f"Could not set up Cloud Logging: {e}")
 
-# --- Logger Configuration ---
+# Configure basic logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger('EnglishTeachingBot')
 
-# --- Configuration Management ---
+# ======================
+# CONFIGURATION MANAGER
+# ======================
 class Config:
     def __init__(self):
         self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
@@ -30,10 +39,11 @@ class Config:
         self._validate_config()
 
     def _get_secret(self, secret_name):
-        """Retrieve secrets from Google Secret Manager with fallback to env vars"""
+        """Retrieve secrets from Google Secret Manager or environment variables"""
         # Try environment variables first
         env_value = os.getenv(secret_name)
         if env_value:
+            logger.info(f"Using {secret_name} from environment variables")
             return env_value
             
         # Fall back to Secret Manager
@@ -41,6 +51,7 @@ class Config:
             client = secretmanager.SecretManagerServiceClient()
             name = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
             response = client.access_secret_version(name=name)
+            logger.info(f"Successfully retrieved {secret_name} from Secret Manager")
             return response.payload.data.decode("UTF-8")
         except Exception as e:
             logger.error(f"Failed to access secret {secret_name}: {e}")
@@ -52,15 +63,19 @@ class Config:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         if not self.GOOGLE_API_KEY:
             raise ValueError("GOOGLE_API_KEY is required")
+        logger.info("Configuration validation successful")
 
 # Initialize configuration
 try:
     config = Config()
+    logger.info("Configuration initialized successfully")
 except Exception as e:
     logger.critical(f"Configuration failed: {e}")
     raise
 
-# --- Gemini AI Configuration ---
+# ======================
+# GEMINI AI SETUP
+# ======================
 genai.configure(api_key=config.GOOGLE_API_KEY)
 
 GENERATION_CONFIG = {
@@ -80,17 +95,90 @@ SAFETY_SETTINGS = [
 SYSTEM_INSTRUCTION = """
 # Role: Kritika - Friendly English Doubt Solver for Hindi Speakers
 
-[Previous full system instruction here...]
+## Core Identity:
+You are Kritika, Himanshu's teaching assistant specializing in helping Hindi speakers with English. Your personality:
+- Warm and encouraging like a favorite elder sister
+- Patient and clear in explanations
+- Culturally aware of Indian contexts
+- Focused on practical language help
+
+## Primary Functions:
+1. *Doubt Solving*:
+   - Explain grammar concepts in simple Hinglish
+   - Help with translations (Hindi ↔ English)
+   - Clarify vocabulary and phrases
+   - Provide examples from daily Indian life
+
+2. *Teaching Support*:
+   - Assist Himanshu's students with their questions
+   - Break down complex concepts into easy steps
+   - Create quick practice exercises when requested
+
+## Communication Style:
+- *Language Preference*: 
+   - 90% Hindi (Roman script) + 10% English
+   - Examples: "Present perfect tense ko samjhiye...", "Is sentence mein error kya hai?"
+- *Tone*: 
+   - Friendly and supportive: "Chinta mat karo, main hoon na!"
+   - Encouraging: "Aapne bahut accha try kiya!"
+   - Respectful: "Aapka sawal accha hai..."
+
+## Teaching Methodology:
+1. *Concept Explanation*:
+   - Hindi explanation first (Roman script)
+   - English structure/formula
+   - 2-3 simple examples
+   - Contrast with Hindi structure
+
+2. *Error Correction*:
+   - Gently point out mistakes: "Yahan thoda sa correction chahiye..."
+   - Show correct version: "Shayad aap ye kehna chahte the..."
+   - Always provide reasoning: "Kyuki plural subject ke saath 'are' aata hai"
+
+3. *Practical Help*:
+   - Real-life usage examples
+   - Short practice exercises (only when asked)
+   - Pronunciation tips with Hindi phonetics
+
+## Special Features:
+- *Instant Help*: 
+   - When user says "help" or "samjhao":
+     1. Simplify concept
+     2. Give 2 relatable examples
+     3. Offer alternative explanations
+     
+- *Cultural Connection*:
+   - Use Indian examples: "Jaise ki 'I'm going to market' ki jagah 'I'm going to the market' bolna sahi hai"
+   - Explain Western concepts in Indian context
+
+## Prohibitions:
+- No fixed curriculum or daily tasks
+- No word-for-word translations
+- No romantic/political/religious examples
+- Don't overwhelm with information
+
+## Interaction Principles:
+- Prioritize user's immediate needs
+- Keep responses conversational and personal
+- Use emojis sparingly (👍✨💡)
+- Always end with: "Aur koi doubt hai?" or "Mai aur madad kar sakti hoon?"
 """
 
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash-latest",
-    generation_config=GENERATION_CONFIG,
-    safety_settings=SAFETY_SETTINGS,
-    system_instruction=SYSTEM_INSTRUCTION
-)
+try:
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash-latest",
+        generation_config=GENERATION_CONFIG,
+        safety_settings=SAFETY_SETTINGS,
+        system_instruction=SYSTEM_INSTRUCTION
+    )
+    logger.info("Gemini model initialized successfully")
+except Exception as e:
+    logger.critical(f"Failed to initialize Gemini model: {e}")
+    raise
 
-# --- Conversation Management ---
+# ======================
+# CONVERSATION MANAGER
+# ======================
 class ConversationManager:
     def __init__(self):
         self.conversations = {}
@@ -103,9 +191,16 @@ class ConversationManager:
                 logger.info(f"Started new chat session for {chat_id}")
             return self.conversations[chat_id]
 
+    async def cleanup(self):
+        async with self.lock:
+            self.conversations.clear()
+            logger.info("Cleared all conversation sessions")
+
 conversation_manager = ConversationManager()
 
-# --- Telegram Handlers ---
+# ======================
+# TELEGRAM HANDLERS
+# ======================
 async def start(update: Update, context):
     try:
         chat_id = update.effective_chat.id
@@ -165,48 +260,74 @@ async def error_handler(update: Update, context):
             "Kuch technical problem aa gayi hai. Hum team ko inform kar diya hai."
         )
 
-# --- Application Management ---
+# ======================
+# APPLICATION MANAGEMENT
+# ======================
 class BotApplication:
     def __init__(self):
         self.application = None
         self.running = False
+        self.shutdown_event = asyncio.Event()
 
     async def initialize(self):
-        self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-        
-        # Add handlers
-        self.application.add_handler(CommandHandler('start', start))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        self.application.add_error_handler(error_handler)
-        
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.updater.start_polling()
-        self.running = True
-        logger.info("Bot application initialized and running")
+        try:
+            self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+            
+            # Add handlers
+            self.application.add_handler(CommandHandler('start', start))
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            self.application.add_error_handler(error_handler)
+            
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.updater.start_polling()
+            self.running = True
+            logger.info("Bot application initialized and running")
+        except Exception as e:
+            logger.critical(f"Failed to initialize application: {e}")
+            raise
 
     async def shutdown(self):
-        if self.application and self.running:
-            await self.application.updater.stop()
-            await self.application.stop()
-            await self.application.shutdown()
-            self.running = False
-            logger.info("Bot application shut down")
-
-    async def run_forever(self):
-        while self.running:
+        if self.running:
             try:
-                await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                logger.info("Received shutdown signal")
-                await self.shutdown()
-                break
+                logger.info("Starting shutdown sequence...")
+                await conversation_manager.cleanup()
+                
+                if self.application:
+                    await self.application.updater.stop()
+                    await self.application.stop()
+                    await self.application.shutdown()
+                
+                self.running = False
+                self.shutdown_event.set()
+                logger.info("Bot application shut down successfully")
             except Exception as e:
-                logger.error(f"Unexpected error in main loop: {e}")
-                await self.shutdown()
+                logger.error(f"Error during shutdown: {e}")
                 raise
 
-# --- Main Execution ---
+    async def run_forever(self):
+        # Set up signal handlers
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(
+                sig,
+                lambda: asyncio.create_task(self.shutdown())
+            )
+        
+        try:
+            while self.running and not self.shutdown_event.is_set():
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            logger.info("Received shutdown signal")
+            await self.shutdown()
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}")
+            await self.shutdown()
+            raise
+
+# ======================
+# MAIN EXECUTION
+# ======================
 async def main():
     bot = BotApplication()
     try:
@@ -214,14 +335,15 @@ async def main():
         await bot.run_forever()
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
-        await bot.shutdown()
     except Exception as e:
         logger.critical(f"Fatal error: {e}", exc_info=True)
-        await bot.shutdown()
-        raise
+    finally:
+        if bot.running:
+            await bot.shutdown()
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except Exception as e:
         logger.critical(f"Critical failure: {e}", exc_info=True)
+        raise
