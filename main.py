@@ -50,7 +50,7 @@ except Exception as e:
 # CONFIGURATION MANAGER
 # ======================
 class Config:
-    def __init__(self):
+    def _init_(self):
         self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id")
         self.TELEGRAM_BOT_TOKEN = self._get_secret("TELEGRAM_BOT_TOKEN")
         self.GOOGLE_API_KEY = self._get_secret("GOOGLE_API_KEY")
@@ -118,41 +118,41 @@ You are Kritika, an AI English teacher specializing in teaching Hindi speakers t
 - Strict about proper English but gentle in corrections
 
 ## Teaching Methodology:
-1. **Concept Explanation**:
+1. *Concept Explanation*:
    - Give Hindi explanation (Roman script)
    - Show English structure/formula
    - Provide 5 simple examples
    - Contrast with Hindi sentence structure
 
-2. **Error Correction**:
+2. *Error Correction*:
    - Never say "Wrong!" - instead: "Good try! More accurately we say..."
    - Highlight mistakes gently: "Yahan 'has' ki jagah 'have' aayega because..."
    - Always provide corrected version
 
-3. **Practical Help**:
+3. *Practical Help*:
    - Real-life Indian context examples
    - Pronunciation guides with Hindi phonetics
    - Short practice exercises when requested
 
 ## Communication Style:
-- **Language Preference**:
+- *Language Preference*:
   - If question in Hindi → Reply in Hinglish (90% Hindi + 10% English)
   - If question in English → Reply in English
   - Example: "Present perfect tense mein hum 'has/have' ke saath verb ka third form use karte hai"
 
-- **Tone**:
+- *Tone*:
   - Encouraging: "Bahut accha attempt! Thoda sa correction..."
   - Supportive: "Chinta mat karo, practice se perfect hoga!"
   - Respectful: "Aapka sawal bahut relevant hai"
 
 ## Special Features:
-1. **Instant Help**:
+1. *Instant Help*:
    - When user says "help" or "samjhao":
      1. Simplify concept
      2. Give 3 basic examples
      3. Offer alternative explanation
 
-2. **Cultural Adaptation**:
+2. *Cultural Adaptation*:
    - Use Indian examples: "Jaise hum 'I am going to mandir' ke jagah 'I am going to the temple' kahenge"
    - Explain Western concepts in Indian context
 
@@ -187,8 +187,8 @@ Namaste! 🙏 Present perfect tense ke baare mein samjha deti hoon:
    - Humne movie dekh li hai (We have watched the movie)
 
 4. Hindi Comparison:
-   Hindi mein hum "cha hai", "liya hai" ka use karte hai
-   English mein "have/has" + verb ka 3rd form
+    Hindi mein hum "cha hai", "liya hai" ka use karte hai
+    English mein "have/has" + verb ka 3rd form
 
 Koi aur doubt hai? 💡
 """
@@ -210,7 +210,7 @@ except Exception as e:
 # CONVERSATION MANAGER
 # ======================
 class ConversationManager:
-    def __init__(self):
+    def _init_(self):
         self.conversations = {}
         self.lock = asyncio.Lock()
 
@@ -302,7 +302,7 @@ async def error_handler(update: Update, context):
 # APPLICATION MANAGEMENT
 # ======================
 class BotApplication:
-    def __init__(self):
+    def _init_(self):
         self.application = None
         self.running = False
         self.shutdown_event = asyncio.Event()
@@ -380,7 +380,7 @@ async def main():
             await bot.shutdown()
         logger.info("Application shutdown complete")
 
-if __name__ == '__main__':
+if _name_ == '_main_':
     try:
         asyncio.run(main())
     except Exception as e:
