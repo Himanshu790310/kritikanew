@@ -64,7 +64,6 @@ class Config:
         if env_value:
             logger.info(f"Using {secret_name} from environment variables")
             return env_value
-            
         # Fall back to Secret Manager
         try:
             client = secretmanager.SecretManagerServiceClient()
@@ -278,7 +277,6 @@ async def handle_message(update: Update, context):
                 "Maaf karna, main samjha nahi. Kya aap phir se try kar sakte hain?\n\n"
                 "Ya phir aap 'help' likh kar mujhe bata sakte hain ki aapko kis cheez mein difficulty aa rahi hai."
             )
-            
     except Exception as e:
         logger.error(f"Error handling message for {chat_id}: {e}", exc_info=True)
         if update.effective_chat:
@@ -312,12 +310,10 @@ class BotApplication:
     async def initialize(self):
         try:
             self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-            
             # Add handlers
             self.application.add_handler(CommandHandler('start', start))
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             self.application.add_error_handler(error_handler)
-            
             await self.application.initialize()
             await self.application.start()
             await self.application.updater.start_polling()
@@ -332,12 +328,10 @@ class BotApplication:
             try:
                 logger.info("Starting graceful shutdown...")
                 await conversation_manager.cleanup()
-                
                 if self.application:
                     await self.application.updater.stop()
                     await self.application.stop()
                     await self.application.shutdown()
-                
                 self.running = False
                 self.shutdown_event.set()
                 logger.info("Bot application shut down successfully")
@@ -353,7 +347,6 @@ class BotApplication:
                 sig,
                 lambda: asyncio.create_task(self.shutdown())
             )
-        
         try:
             while self.running and not self.shutdown_event.is_set():
                 await asyncio.sleep(1)
@@ -373,13 +366,11 @@ async def main():
         # Start HTTP server for health checks
         await start_http_server()
         logger.info("HTTP health check server started")
-        
         # Initialize and run bot
         bot = BotApplication()
         await bot.initialize()
         logger.info("Bot is now running")
         await bot.run_forever()
-        
     except KeyboardInterrupt:
         logger.info("Received keyboard interrupt")
     except Exception as e:
