@@ -3,16 +3,16 @@ import logging
 import asyncio
 import signal
 from threading import Thread
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import uvicorn
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram import Update, Bot
 import google.generativeai as genai
 from google.cloud import secretmanager
 import google.cloud.logging
 
 # ======================
-# FASTAPI HEALTH CHECK
+# FASTAPI APP SETUP
 # ======================
 app = FastAPI()
 
@@ -23,6 +23,18 @@ async def health_check():
 @app.get("/ready")
 async def readiness_check():
     return {"ready": True}
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    """Endpoint for Telegram webhook updates"""
+    try:
+        json_data = await request.json()
+        update = Update.de_json(json_data, bot_instance)
+        await application.process_update(update)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}, 500
 
 def run_fastapi():
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
@@ -50,10 +62,11 @@ except Exception as e:
 # CONFIGURATION MANAGER
 # ======================
 class Config:
-    def _init_(self):
+    def __init__(self):
         self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id")
         self.TELEGRAM_BOT_TOKEN = self._get_secret("TELEGRAM_BOT_TOKEN")
         self.GOOGLE_API_KEY = self._get_secret("GOOGLE_API_KEY")
+        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
         self._validate_config()
         logger.info("Configuration loaded successfully")
 
@@ -64,6 +77,7 @@ class Config:
         if env_value:
             logger.info(f"Using {secret_name} from environment variables")
             return env_value
+        
         # Fall back to Secret Manager
         try:
             client = secretmanager.SecretManagerServiceClient()
@@ -210,7 +224,7 @@ except Exception as e:
 # CONVERSATION MANAGER
 # ======================
 class ConversationManager:
-    def _init_(self):
+    def __init__(self):
         self.conversations = {}
         self.lock = asyncio.Lock()
 
@@ -231,7 +245,7 @@ conversation_manager = ConversationManager()
 # ======================
 # TELEGRAM HANDLERS
 # ======================
-async def start(update: Update, context):
+async def start(update: Update, context: CallbackContext):
     try:
         chat_id = update.effective_chat.id
         user = update.effective_user
@@ -255,7 +269,7 @@ async def start(update: Update, context):
                 "Kuch technical problem aa gayi hai. Kripya thodi der baad try karein."
             )
 
-async def handle_message(update: Update, context):
+async def handle_message(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     user_message = update.message.text
     
@@ -266,7 +280,7 @@ async def handle_message(update: Update, context):
     try:
         logger.info(f"Processing message from {chat_id}: {user_message[:100]}...")
         chat = await conversation_manager.get_chat(chat_id)
-        response = chat.send_message(user_message)
+        response = await chat.send_message(user_message)
         
         if response.text:
             await update.message.reply_text(response.text)
@@ -285,7 +299,7 @@ async def handle_message(update: Update, context):
                 "Kripya kuch samay baad phir try karein. Dhanyavaad! 🙏"
             )
 
-async def error_handler(update: Update, context):
+async def error_handler(update: Update, context: CallbackContext):
     error = context.error
     logger.error(f"Telegram error: {error}", exc_info=True)
     
@@ -302,36 +316,59 @@ async def error_handler(update: Update, context):
 # APPLICATION MANAGEMENT
 # ======================
 class BotApplication:
-    def _init_(self):
+    def __init__(self):
         self.application = None
+        self.bot = None
         self.running = False
         self.shutdown_event = asyncio.Event()
 
     async def initialize(self):
         try:
             self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+            self.bot = self.application.bot
+            
             # Add handlers
             self.application.add_handler(CommandHandler('start', start))
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             self.application.add_error_handler(error_handler)
+            
             await self.application.initialize()
             await self.application.start()
-            await self.application.updater.start_polling()
+            
+            if config.WEBHOOK_URL:
+                await self.setup_webhook(config.WEBHOOK_URL)
+            else:
+                await self.application.updater.start_polling()
+                logger.info("Bot started in polling mode")
+                
             self.running = True
             logger.info("Bot application initialized and running")
         except Exception as e:
             logger.critical(f"Failed to initialize application: {e}")
             raise
 
+    async def setup_webhook(self, url):
+        """Configure Telegram webhook"""
+        webhook_url = f"{url}/webhook"
+        await self.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook configured at {webhook_url}")
+
     async def shutdown(self):
         if self.running:
             try:
                 logger.info("Starting graceful shutdown...")
                 await conversation_manager.cleanup()
+                
+                if config.WEBHOOK_URL:
+                    await self.bot.delete_webhook()
+                    logger.info("Webhook removed")
+                
                 if self.application:
-                    await self.application.updater.stop()
+                    if hasattr(self.application, 'updater') and self.application.updater:
+                        await self.application.updater.stop()
                     await self.application.stop()
                     await self.application.shutdown()
+                
                 self.running = False
                 self.shutdown_event.set()
                 logger.info("Bot application shut down successfully")
@@ -347,6 +384,7 @@ class BotApplication:
                 sig,
                 lambda: asyncio.create_task(self.shutdown())
             )
+        
         try:
             while self.running and not self.shutdown_event.is_set():
                 await asyncio.sleep(1)
@@ -358,17 +396,27 @@ class BotApplication:
             await self.shutdown()
             raise
 
+# Global references for webhook handling
+application = None
+bot_instance = None
+
 # ======================
 # MAIN EXECUTION
 # ======================
 async def main():
+    global application, bot_instance
+    
     try:
         # Start HTTP server for health checks
         await start_http_server()
         logger.info("HTTP health check server started")
+        
         # Initialize and run bot
         bot = BotApplication()
         await bot.initialize()
+        application = bot.application
+        bot_instance = bot.bot
+        
         logger.info("Bot is now running")
         await bot.run_forever()
     except KeyboardInterrupt:
@@ -380,7 +428,7 @@ async def main():
             await bot.shutdown()
         logger.info("Application shutdown complete")
 
-if _name_ == '_main_':
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
