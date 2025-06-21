@@ -20,6 +20,11 @@ app = FastAPI()
 async def health_check():
     return {"status": "healthy", "service": "english-teaching-bot"}
 
+@app.on_event("startup")
+async def startup():
+    logger.info("Service initializing...")
+    # Initialize critical components here    
+
 @app.get("/ready")
 async def readiness_check():
     return {"ready": True}
