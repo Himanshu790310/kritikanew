@@ -1,275 +1,123 @@
 import os
 import logging
-import asyncio
-import signal
-from threading import Thread
+import asyncio # Keep asyncio for async operations
+from typing import Dict
+
+# For FastAPI
 from fastapi import FastAPI, Request, HTTPException
-import uvicorn
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from telegram import Update, Bot
+
+# For Google Secret Manager
+from google.cloud import secretmanager # Correct import path
+
+# For Google Gemini
 import google.generativeai as genai
-from google.cloud import secretmanager
-import google.cloud.logging
 
-# ======================
-# FASTAPI APP SETUP
-# ======================
-app = FastAPI()
+# For Python Telegram Bot
+from telegram import Update, Bot
+from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
-@app.get("/healthz")
-async def health_check():
-    """Kubernetes-style health check endpoint"""
-    return {
-        "status": "healthy",
-        "details": {
-            "telegram_ready": application is not None,
-            "gemini_ready": model is not None,
-            "service": "english-teaching-bot"
-        }
-    }
-
-@app.on_event("startup")
-async def startup():
-    logger.info("Service initializing...")
-    try:
-        # Initialize critical components
-        genai.configure(api_key=config.GOOGLE_API_KEY)
-        logger.info("Service initialized successfully")
-    except Exception as e:
-        logger.critical(f"Startup failed: {e}")
-        raise HTTPException(status_code=500, detail="Service initialization failed")
-
-@app.get("/ready")
-async def readiness_check():
-    try:
-        # Add any readiness checks here
-        return {"ready": True}
-    except Exception as e:
-        logger.error(f"Readiness check failed: {e}")
-        raise HTTPException(status_code=503, detail="Service not ready")
-
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    """Endpoint for Telegram webhook updates"""
-    try:
-        json_data = await request.json()
-        update = Update.de_json(json_data, bot_instance)
-        await application.process_update(update)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}, 500
-
-def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
-
-async def start_http_server():
-    Thread(target=run_fastapi, daemon=True).start()
+# For running FastAPI with Uvicorn
+import uvicorn
 
 # ======================
 # LOGGING CONFIGURATION
 # ======================
+# Initialize basic logging first, then try Cloud Logging setup
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.DEBUG # Set to DEBUG for verbose output during debugging
+)
+logger = logging.getLogger('EnglishTeachingBot')
+logger.setLevel(logging.DEBUG) # Ensure logger level is also DEBUG
+
 try:
+    import google.cloud.logging
     logging_client = google.cloud.logging.Client()
-    logging_client.setup_logging()
-    logger = logging.getLogger('EnglishTeachingBot')
-    logger.setLevel(logging.INFO)
+    logging_client.setup_logging(log_level=logging.DEBUG) # Set Cloud Logging to DEBUG
+    logger.info("Cloud Logging set up.")
 except Exception as e:
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )
-    logger = logging.getLogger('EnglishTeachingBot')
-    logger.warning(f"Could not set up Cloud Logging: {e}")
+    logger.warning(f"Could not set up Cloud Logging, falling back to basic logging: {e}")
 
 # ======================
 # CONFIGURATION MANAGER
 # ======================
 class Config:
     def __init__(self):
-        self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "your-project-id")
+        # Default to your specific project ID here if not in env
+        self.PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "kritika-463510") 
+        logger.info(f"Using Google Cloud Project ID: {self.PROJECT_ID}")
+
         self.TELEGRAM_BOT_TOKEN = self._get_secret("TELEGRAM_BOT_TOKEN")
         self.GOOGLE_API_KEY = self._get_secret("GOOGLE_API_KEY")
-        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+        # WEBHOOK_URL will be set by Cloud Run and accessed as an env var
+        self.WEBHOOK_URL = os.getenv("K_SERVICE_URL", "") # Standard Cloud Run URL env var
+        
         self._validate_config()
         logger.info("Configuration loaded successfully")
 
     def _get_secret(self, secret_name):
-        """Retrieve secrets from Google Secret Manager or environment variables"""
         env_value = os.getenv(secret_name)
         if env_value:
-            logger.info(f"Using {secret_name} from environment variables")
+            logger.debug(f"Retrieved {secret_name} from environment variable.")
             return env_value
         
         try:
             client = secretmanager.SecretManagerServiceClient()
             name = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
+            logger.debug(f"Attempting to retrieve secret from Secret Manager: {name}")
             response = client.access_secret_version(name=name)
-            logger.info(f"Retrieved {secret_name} from Secret Manager")
-            return response.payload.data.decode("UTF-8")
+            secret_value = response.payload.data.decode("UTF-8")
+            logger.debug(f"Successfully retrieved {secret_name} from Secret Manager.")
+            return secret_value
         except Exception as e:
-            logger.error(f"Failed to access secret {secret_name}: {e}")
+            logger.error(f"Failed to retrieve secret '{secret_name}' from Secret Manager: {e}", exc_info=True)
             raise ValueError(f"Could not retrieve {secret_name}")
 
     def _validate_config(self):
-        """Validate all required configurations"""
         if not self.TELEGRAM_BOT_TOKEN:
-            raise ValueError("TELEGRAM_BOT_TOKEN is required")
+            raise ValueError("TELEGRAM_BOT_TOKEN is required and not found.")
         if not self.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY is required")
+            raise ValueError("GOOGLE_API_KEY is required and not found.")
+        if not self.WEBHOOK_URL:
+            logger.warning("WEBHOOK_URL (K_SERVICE_URL) not found in environment. Webhook will not be set automatically during startup.")
 
-try:
-    config = Config()
-except Exception as e:
-    logger.critical(f"Configuration failed: {e}")
-    raise
 
-# ======================
-# GEMINI AI SETUP
-# ======================
-genai.configure(api_key=config.GOOGLE_API_KEY)
-
-GENERATION_CONFIG = {
-    "temperature": 0.9,
-    "top_p": 1,
-    "top_k": 1,
-    "max_output_tokens": 2500,
-}
-
-SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-]
-
-SYSTEM_INSTRUCTION = """
-# Role: Kritika - The Perfect English Teacher for Hindi Speakers
-
-## Core Identity:
-You are Kritika, an AI English teacher specializing in teaching Hindi speakers through Hinglish. Your personality is:
-- Warm and encouraging like a favorite teacher
-- Patient and clear in explanations
-- Culturally aware of Indian contexts
-- Strict about proper English but gentle in corrections
-
-## Teaching Methodology:
-1. Concept Explanation:
-   - Give Hindi explanation (Roman script)
-   - Show English structure/formula
-   - Provide 5 simple examples
-   - Contrast with Hindi sentence structure
-
-2. Error Correction:
-   - Never say "Wrong!" - instead: "Good try! More accurately we say..."
-   - Highlight mistakes gently: "Yahan 'has' ki jagah 'have' aayega because..."
-   - Always provide corrected version
-
-3. Practical Help:
-   - Real-life Indian context examples
-   - Pronunciation guides with Hindi phonetics
-   - Short practice exercises when requested
-
-## Communication Style:
-- Language Preference:
-  - If question in Hindi: Reply in Hinglish (90% Hindi + 10% English)
-  - If question in English: Reply in English
-  - Example: "Present perfect tense mein hum 'has/have' ke saath verb ka third form use karte hai"
-
-- Tone:
-  - Encouraging: "Bahut accha attempt! Thoda sa correction..."
-  - Supportive: "Chinta mat karo, practice se perfect hoga!"
-  - Respectful: "Aapka sawal bahut relevant hai"
-
-## Special Features:
-1. Instant Help:
-   - When user says "help" or "samjhao":
-     1. Simplify concept
-     2. Give 3 basic examples
-     3. Offer alternative explanation
-
-2. Cultural Adaptation:
-   - Use Indian examples: "Jaise hum 'I am going to mandir' ke jagah 'I am going to the temple' kahenge"
-   - Explain Western concepts in Indian context
-
-## Prohibitions:
-- No word-for-word translations
-- No romantic/political/religious examples
-- Don't overwhelm with information
-- Never use complex English to explain basics
-
-## Response Format:
-1. Start with greeting if new conversation
-2. Explain concept in simple steps
-3. Provide examples
-4. End with:
-   - "Aur koi doubt hai?"
-   - "Mai aur madad kar sakti hoon?"
-
-## Example Interactions:
-User: "Present perfect tense samjhao"
-Response:
-Namaste! Present perfect tense ke baare mein samjha deti hoon:
-
-1. Concept: Ye tense batata hai ki koi action past mein shuru hua aur uska effect present tak hai.
-
-2. Structure:
-   Subject + has/have + verb ka 3rd form
-
-3. Examples:
-   - Mai Delhi gaya hoon (I have gone to Delhi)
-   - Usne khana kha liya hai (She has eaten food)
-   - Humne movie dekh li hai (We have watched the movie)
-
-4. Hindi Comparison:
-    Hindi mein hum "cha hai", "liya hai" ka use karte hai
-    English mein "have/has" + verb ka 3rd form
-
-Koi aur doubt hai?
-"""
-
-try:
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash-latest",
-        generation_config=GENERATION_CONFIG,
-        safety_settings=SAFETY_SETTINGS,
-        system_instruction=SYSTEM_INSTRUCTION
-    )
-    logger.info("Gemini model initialized successfully")
-except Exception as e:
-    logger.critical(f"Failed to initialize Gemini model: {e}")
-    raise
+# --- GLOBAL APPLICATION INSTANCES ---
+# These will be initialized in the startup event
+config: Config = None
+application: Application = None
+conversation_manager: 'ConversationManager' = None # Forward declaration
 
 # ======================
-# CONVERSATION MANAGER
+# CONVERSATION MANAGER (for maintaining chat history with Gemini)
 # ======================
 class ConversationManager:
-    def __init__(self):
-        self.conversations = {}
+    def __init__(self, model_instance: genai.GenerativeModel):
+        self.chats: Dict[int, genai.GenerativeModel.start_chat] = {}
+        self.model = model_instance # Use the already initialized model
         self.lock = asyncio.Lock()
+        logger.info("ConversationManager initialized.")
 
-    async def get_chat(self, chat_id):
+    async def get_chat(self, chat_id: int):
         async with self.lock:
-            if chat_id not in self.conversations:
-                self.conversations[chat_id] = model.start_chat(history=[])
-                logger.info(f"New chat session started for {chat_id}")
-            return self.conversations[chat_id]
+            if chat_id not in self.chats:
+                self.chats[chat_id] = self.model.start_chat(history=[])
+                logger.info(f"New chat session started for chat_id: {chat_id}")
+            return self.chats[chat_id]
 
     async def cleanup(self):
         async with self.lock:
-            self.conversations.clear()
+            self.chats.clear()
             logger.info("All conversation sessions cleared")
-
-conversation_manager = ConversationManager()
 
 # ======================
 # TELEGRAM HANDLERS
 # ======================
-async def start(update: Update, context: CallbackContext):
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat_id = update.effective_chat.id
         user = update.effective_user
-        await conversation_manager.get_chat(chat_id)
+        await conversation_manager.get_chat(chat_id) # Ensure chat session starts
         
         welcome_msg = (
             f"Namaste {user.first_name}!\n\n"
@@ -282,44 +130,46 @@ async def start(update: Update, context: CallbackContext):
         )
         await update.message.reply_text(welcome_msg)
         logger.info(f"Sent welcome message to {chat_id}")
+        print(f"DEBUG: Sent welcome message to {chat_id}") # Debug print
     except Exception as e:
-        logger.error(f"Error in start handler: {e}", exc_info=True)
+        logger.error(f"Error in start handler for {update.effective_chat.id}: {e}", exc_info=True)
         if update.effective_chat:
             await update.effective_chat.send_message(
                 "Kuch technical problem aa gayi hai. Kripya thodi der baad try karein."
             )
 
-async def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_message = update.message.text
     
+    logger.info(f"Processing message from {chat_id}: '{user_message[:100]}'")
+    print(f"DEBUG: Processing message from {chat_id}: {user_message}") # Debug print
+
     if not user_message:
-        logger.warning(f"Empty message from {chat_id}")
+        logger.warning(f"Empty message received from {chat_id}")
+        print(f"DEBUG: Empty message from {chat_id}") # Debug print
         return
 
     try:
-        logger.info(f"Processing message from {chat_id}: {user_message[:100]}...")
         chat = await conversation_manager.get_chat(chat_id)
+        # Assuming your Gemini model is already configured and global/accessible
         response = await chat.send_message(user_message)
         
         if response.text:
             await update.message.reply_text(response.text)
-            logger.info(f"Response sent to {chat_id}")
+            logger.info(f"Bot replied to {chat_id}")
+            print(f"DEBUG: Sent reply to {chat_id}: {response.text[:50]}...") # Debug print
         else:
-            logger.error(f"Empty response from Gemini for {chat_id}")
-            await update.message.reply_text(
-                "Maaf karna, main samjha nahi. Kya aap phir se try kar sakte hain?\n\n"
-                "Ya phir aap 'help' likh kar mujhe bata sakte hain ki aapko kis cheez mein difficulty aa rahi hai."
-            )
-    except Exception as e:
-        logger.error(f"Error handling message for {chat_id}: {e}", exc_info=True)
-        if update.effective_chat:
-            await update.effective_chat.send_message(
-                "Kuch technical problem aa raha hai. Hum team ko inform kar diya hai.\n\n"
-                "Kripya kuch samay baad phir try karein. Dhanyavaad!"
-            )
+            logger.warning(f"Empty text in Gemini response for {chat_id}")
+            await update.message.reply_text("I'm sorry, I couldn't generate a response for that.")
+            print(f"DEBUG: Sent error reply (empty Gemini response) to {chat_id}") # Debug print
 
-async def error_handler(update: Update, context: CallbackContext):
+    except Exception as e:
+        logger.error(f"Error handling message from {chat_id}: {e}", exc_info=True)
+        await update.message.reply_text("An error occurred while processing your request. Please try again later.")
+        print(f"DEBUG: Error in handle_message for {chat_id}: {e}") # Debug print
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     error = context.error
     logger.error(f"Telegram error: {error}", exc_info=True)
     
@@ -330,122 +180,143 @@ async def error_handler(update: Update, context: CallbackContext):
                 "Kripya thodi der baad phir try karein. Dhanyavaad!"
             )
         except Exception as e:
-            logger.error(f"Failed to send error message: {e}")
+            logger.error(f"Failed to send error message in error_handler: {e}")
 
 # ======================
-# APPLICATION MANAGEMENT
+# FASTAPI APP SETUP
 # ======================
-class BotApplication:
-    def __init__(self):
-        self.application = None
-        self.bot = None
-        self.running = False
-        self.shutdown_event = asyncio.Event()
+app = FastAPI()
 
-    async def initialize(self):
-        try:
-            self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-            self.bot = self.application.bot
-            
-            self.application.add_handler(CommandHandler('start', start))
-            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-            self.application.add_error_handler(error_handler)
-            
-            await self.application.initialize()
-            await self.application.start()
-            
-            if config.WEBHOOK_URL:
-                await self.setup_webhook(config.WEBHOOK_URL)
-            else:
-                await self.application.updater.start_polling()
-                logger.info("Bot started in polling mode")
-                
-            self.running = True
-            logger.info("Bot application initialized and running")
-        except Exception as e:
-            logger.critical(f"Failed to initialize application: {e}")
-            raise
+@app.get("/")
+async def root():
+    return {"message": "English Teaching Bot is running!"}
 
-    async def setup_webhook(self, url):
-        webhook_url = f"{url}/webhook"
-        await self.bot.set_webhook(webhook_url)
-        logger.info(f"Webhook configured at {webhook_url}")
+# --- HEALTH AND READINESS CHECKS ---
+@app.get("/healthz")
+async def health_check():
+    """Kubernetes-style health check endpoint"""
+    return {
+        "status": "healthy",
+        "details": {
+            "telegram_app_ready": application is not None and application.running,
+            "gemini_model_ready": hasattr(genai, 'default_generative_model') and genai.default_generative_model is not None,
+            "config_loaded": config is not None,
+            "service": "english-teaching-bot"
+        }
+    }
 
-    async def shutdown(self):
-        if self.running:
-            try:
-                logger.info("Starting graceful shutdown...")
-                await conversation_manager.cleanup()
-                
-                if config.WEBHOOK_URL:
-                    await self.bot.delete_webhook()
-                    logger.info("Webhook removed")
-                
-                if self.application:
-                    if hasattr(self.application, 'updater') and self.application.updater:
-                        await self.application.updater.stop()
-                    await self.application.stop()
-                    await self.application.shutdown()
-                
-                self.running = False
-                self.shutdown_event.set()
-                logger.info("Bot application shut down successfully")
-            except Exception as e:
-                logger.error(f"Error during shutdown: {e}")
-                raise
+@app.get("/ready")
+async def readiness_check():
+    try:
+        # Check if core components are initialized and ready to serve
+        if application and application.running and \
+           hasattr(genai, 'default_generative_model') and genai.default_generative_model:
+            return {"ready": True}
+        else:
+            logger.warning("Readiness check failed: Application or Gemini not ready.")
+            raise HTTPException(status_code=503, detail="Service not ready")
+    except Exception as e:
+        logger.error(f"Readiness check failed unexpectedly: {e}")
+        raise HTTPException(status_code=503, detail="Service not ready (internal error)")
 
-    async def run_forever(self):
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(
-                sig,
-                lambda: asyncio.create_task(self.shutdown())
-            )
-        
-        try:
-            while self.running and not self.shutdown_event.is_set():
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            logger.info("Received shutdown signal")
-            await self.shutdown()
-        except Exception as e:
-            logger.error(f"Unexpected error in main loop: {e}")
-            await self.shutdown()
-            raise
 
-# Global references for webhook handling
-application = None
-bot_instance = None
+# --- FASTAPI STARTUP EVENT ---
+@app.on_event("startup")
+async def startup_event():
+    global config, application, conversation_manager
+    logger.info("--- Application startup event initiated ---")
+    print("DEBUG: --- Application startup event initiated ---") # Debug print
+
+    try:
+        # 1. Load Configuration
+        config = Config()
+        logger.info("Config loaded.")
+        print("DEBUG: Config loaded.") # Debug print
+
+        # 2. Configure Gemini (as it needs API key from config)
+        genai.configure(api_key=config.GOOGLE_API_KEY)
+        gemini_model_instance = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-latest",
+            generation_config=GENERATION_CONFIG,
+            safety_settings=SAFETY_SETTINGS,
+            system_instruction=SYSTEM_INSTRUCTION
+        )
+        logger.info("Gemini model configured and initialized.")
+        print("DEBUG: Gemini model configured.") # Debug print
+
+        # 3. Initialize Telegram Application
+        application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        logger.info("Telegram Application builder created.")
+        print("DEBUG: Telegram Application builder created.") # Debug print
+
+        # Add Handlers
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_error_handler(error_handler)
+        logger.info("Telegram handlers added.")
+        print("DEBUG: Telegram handlers added.") # Debug print
+
+        # Initialize and start the Telegram application (for webhook mode, this just sets up internal state)
+        await application.initialize()
+        await application.start() # Necessary for internal PTB state management, even with webhooks
+        logger.info("Telegram Application initialized and started internally.")
+        print("DEBUG: Telegram Application initialized and started internally.") # Debug print
+
+        # 4. Set Telegram Webhook (if WEBHOOK_URL is available)
+        if config.WEBHOOK_URL:
+            webhook_url_full = f"{config.WEBHOOK_URL}/webhook"
+            await application.bot.set_webhook(url=webhook_url_full)
+            logger.info(f"Webhook set to: {webhook_url_full}")
+            print(f"DEBUG: Webhook set to: {webhook_url_full}") # Debug print
+        else:
+            logger.warning("WEBHOOK_URL not found in environment (K_SERVICE_URL). Webhook not set automatically.")
+            print("DEBUG: WEBHOOK_URL missing, webhook not set automatically.") # Debug print
+
+        # 5. Initialize Conversation Manager (after Gemini model is ready)
+        conversation_manager = ConversationManager(model_instance=gemini_model_instance)
+        logger.info("ConversationManager initialized.")
+        print("DEBUG: ConversationManager initialized.") # Debug print
+
+        logger.info("--- Application startup complete ---")
+        print("DEBUG: --- Application startup complete ---") # Debug print
+
+    except Exception as e:
+        logger.critical(f"FATAL ERROR during application startup: {e}", exc_info=True)
+        print(f"DEBUG: FATAL ERROR during startup: {e}") # Debug print
+        # Re-raise to prevent the server from starting improperly
+        raise
+
+# --- TELEGRAM WEBHOOK ENDPOINT ---
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    print("----- Webhook request received! -----") # Debug print to check if request reaches
+    try:
+        if application is None or not application.running:
+            logger.error("Webhook received but Telegram Application is not initialized/running.")
+            print("DEBUG: Application not ready for webhook.") # Debug print
+            raise HTTPException(status_code=503, detail="Telegram Application not ready")
+
+        json_data = await request.json()
+        print(f"Received JSON data: {json_data}") # Debug print of received data
+
+        # Use application.bot directly as it's correctly initialized in startup_event
+        update = Update.de_json(json_data, application.bot) 
+        print(f"Update object created for chat: {update.effective_chat.id}") # Debug print
+
+        await application.process_update(update)
+        print("----- Webhook request processed. -----") # Debug print
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}", exc_info=True)
+        print(f"----- Webhook ERROR: {e} -----") # Debug print for immediate error visibility
+        # Return 500 status code for internal errors
+        return {"status": "error", "message": str(e)}, 500
 
 # ======================
 # MAIN EXECUTION
 # ======================
-async def main():
-    global application, bot_instance
-    
-    try:
-        await start_http_server()
-        logger.info("HTTP health check server started")
-        
-        bot = BotApplication()
-        await bot.initialize()
-        application = bot.application
-        bot_instance = bot.bot
-        
-        logger.info("Bot is now running")
-        await bot.run_forever()
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt")
-    except Exception as e:
-        logger.critical(f"Fatal error: {e}", exc_info=True)
-    finally:
-        if 'bot' in locals() and bot.running:
-            await bot.shutdown()
-        logger.info("Application shutdown complete")
-
+# This is the standard entry point for Cloud Run
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.critical(f"Critical failure: {e}", exc_info=True)
-        raise
+    logger.info("Starting FastAPI application with Uvicorn.")
+    # Uvicorn will automatically call app.on_event("startup")
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
