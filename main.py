@@ -16,9 +16,17 @@ import google.cloud.logging
 # ======================
 app = FastAPI()
 
-@app.get("/")
+@app.get("/healthz")
 async def health_check():
-    return {"status": "healthy", "service": "english-teaching-bot"}
+    """Kubernetes-style health check endpoint"""
+    return {
+        "status": "healthy",
+        "details": {
+            "telegram_ready": application is not None,
+            "gemini_ready": model is not None,
+            "service": "english-teaching-bot"
+        }
+    }
 
 @app.on_event("startup")
 async def startup():
