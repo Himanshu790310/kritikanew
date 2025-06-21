@@ -1,27 +1,22 @@
-# Use official Python image
-FROM python:3.9-slim
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc python3-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PORT=8080 \
-    APP_HOME=/app
+    TELEGRAM_BOT_TOKEN=7833059587:AAGWCrFoYJqaIy51BHHRVtNrimJbZGTMows \
+    GOOGLE_API_KEY=AIzaSyDc6wrTkV2k4AWl72NZxET6URrXCbM8haM \
+    WEBHOOK_URL=https://kritikanew1-494584189423.europe-west1.run.app/webhook
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create and set working directory
-WORKDIR $APP_HOME
-
-# Copy requirements first for caching
-COPY requirements.txt .
+WORKDIR /app
+COPY . .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
-# Run the application
-CMD ["python", "main.py"]
+# Run with Gunicorn
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "120", "--worker-class", "uvicorn.workers.UvicornWorker", "main:app"]
