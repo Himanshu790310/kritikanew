@@ -1,38 +1,27 @@
 steps:
-  # Build the Docker image
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/english-bot', '.']
-  
-  # Push the image to Container Registry
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/english-bot']
-  
-  # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    args:
-    - 'gcloud'
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/kritikanew1', '.']
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args: 
     - 'run'
     - 'deploy'
-    - 'english-bot'
+    - 'kritikanew1'
     - '--image'
-    - 'gcr.io/$PROJECT_ID/english-bot'
+    - 'gcr.io/$PROJECT_ID/kritikanew1'
     - '--region'
-    - 'us-central1'
+    - 'europe-west1'
     - '--platform'
     - 'managed'
     - '--allow-unauthenticated'
+    - '--set-env-vars'
+    - 'TELEGRAM_BOT_TOKEN=7833059587:AAGWCrFoYJqaIy51BHHRVtNrimJbZGTMows,GOOGLE_API_KEY=AIzaSyDc6wrTkV2k4AWl72NZxET6URrXCbM8haM,WEBHOOK_URL=https://kritikanew1-494584189423.europe-west1.run.app/webhook'
     - '--port'
     - '8080'
     - '--timeout'
-    - '300s'
-    - '--set-env-vars'
-    - 'GOOGLE_CLOUD_PROJECT=$PROJECT_ID'
-    - '--set-secrets'
-    - 'TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN:latest,GOOGLE_API_KEY=GOOGLE_API_KEY:latest'
-    - '--min-instances'
+    - '300'
+    - '--cpu'
     - '1'
-    - '--max-instances'
-    - '3'
-
-# Store the image in Container Registry
-images: ['gcr.io/$PROJECT_ID/english-bot']
+    - '--memory'
+    - '1Gi'
