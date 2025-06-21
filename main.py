@@ -183,12 +183,11 @@ You are Kritika, an AI English teacher specializing in teaching Hindi speakers t
 4. End with:
    - "Aur koi doubt hai?"
    - "Mai aur madad kar sakti hoon?"
-5. Use emojis sparingly (💡 for tips, ✨ for encouragement)
 
 ## Example Interactions:
 User: "Present perfect tense samjhao"
 Response: """
-Namaste! 🙏 Present perfect tense ke baare mein samjha deti hoon:
+Namaste!  Present perfect tense ke baare mein samjha deti hoon:
 
 1. Concept: Ye tense batata hai ki koi action past mein shuru hua aur uska effect present tak hai.
 
@@ -204,7 +203,7 @@ Namaste! 🙏 Present perfect tense ke baare mein samjha deti hoon:
     Hindi mein hum "cha hai", "liya hai" ka use karte hai
     English mein "have/has" + verb ka 3rd form
 
-Koi aur doubt hai? 💡
+Koi aur doubt hai? 
 """
 """
 
@@ -252,13 +251,13 @@ async def start(update: Update, context: CallbackContext):
         await conversation_manager.get_chat(chat_id)
         
         welcome_msg = (
-            f"Namaste {user.first_name}! 🙏\n\n"
+            f"Namaste {user.first_name}! \n\n"
             "Main Kritika hoon - aapki personal English teacher.\n\n"
             "Mujhse aap poochh sakte hain:\n"
             "• Grammar concepts\n• Sentence corrections\n• Translations\n"
             "• Vocabulary doubts\n• Pronunciation help\n\n"
             "Koi bhi English-related problem ho, bas message kijiye!\n\n"
-            "Chaliye shuru karte hain... Aaj aap kya seekhna chahenge? 💡"
+            "Chaliye shuru karte hain... Aaj aap kya seekhna chahenge? "
         )
         await update.message.reply_text(welcome_msg)
         logger.info(f"Sent welcome message to {chat_id}")
@@ -296,7 +295,7 @@ async def handle_message(update: Update, context: CallbackContext):
         if update.effective_chat:
             await update.effective_chat.send_message(
                 "Kuch technical problem aa raha hai. Hum team ko inform kar diya hai.\n\n"
-                "Kripya kuch samay baad phir try karein. Dhanyavaad! 🙏"
+                "Kripya kuch samay baad phir try karein. Dhanyavaad! "
             )
 
 async def error_handler(update: Update, context: CallbackContext):
@@ -307,7 +306,7 @@ async def error_handler(update: Update, context: CallbackContext):
         try:
             await update.effective_chat.send_message(
                 "Kuch technical problem aa gayi hai. Hum ise fix kar rahe hain.\n\n"
-                "Kripya thodi der baad phir try karein. Dhanyavaad! 🙏"
+                "Kripya thodi der baad phir try karein. Dhanyavaad! "
             )
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
