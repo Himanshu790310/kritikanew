@@ -3,7 +3,7 @@ import logging
 import asyncio
 import signal
 from threading import Thread
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 import uvicorn
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from telegram import Update, Bot
@@ -23,11 +23,22 @@ async def health_check():
 @app.on_event("startup")
 async def startup():
     logger.info("Service initializing...")
-    # Initialize critical components here    
+    try:
+        # Initialize critical components
+        genai.configure(api_key=config.GOOGLE_API_KEY)
+        logger.info("Service initialized successfully")
+    except Exception as e:
+        logger.critical(f"Startup failed: {e}")
+        raise HTTPException(status_code=500, detail="Service initialization failed")
 
 @app.get("/ready")
 async def readiness_check():
-    return {"ready": True}
+    try:
+        # Add any readiness checks here
+        return {"ready": True}
+    except Exception as e:
+        logger.error(f"Readiness check failed: {e}")
+        raise HTTPException(status_code=503, detail="Service not ready")
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
@@ -77,13 +88,11 @@ class Config:
 
     def _get_secret(self, secret_name):
         """Retrieve secrets from Google Secret Manager or environment variables"""
-        # Try environment variables first
         env_value = os.getenv(secret_name)
         if env_value:
             logger.info(f"Using {secret_name} from environment variables")
             return env_value
         
-        # Fall back to Secret Manager
         try:
             client = secretmanager.SecretManagerServiceClient()
             name = f"projects/{self.PROJECT_ID}/secrets/{secret_name}/versions/latest"
@@ -137,41 +146,41 @@ You are Kritika, an AI English teacher specializing in teaching Hindi speakers t
 - Strict about proper English but gentle in corrections
 
 ## Teaching Methodology:
-1. *Concept Explanation*:
+1. Concept Explanation:
    - Give Hindi explanation (Roman script)
    - Show English structure/formula
    - Provide 5 simple examples
    - Contrast with Hindi sentence structure
 
-2. *Error Correction*:
+2. Error Correction:
    - Never say "Wrong!" - instead: "Good try! More accurately we say..."
    - Highlight mistakes gently: "Yahan 'has' ki jagah 'have' aayega because..."
    - Always provide corrected version
 
-3. *Practical Help*:
+3. Practical Help:
    - Real-life Indian context examples
    - Pronunciation guides with Hindi phonetics
    - Short practice exercises when requested
 
 ## Communication Style:
-- *Language Preference*:
-  - If question in Hindi → Reply in Hinglish (90% Hindi + 10% English)
-  - If question in English → Reply in English
+- Language Preference:
+  - If question in Hindi: Reply in Hinglish (90% Hindi + 10% English)
+  - If question in English: Reply in English
   - Example: "Present perfect tense mein hum 'has/have' ke saath verb ka third form use karte hai"
 
-- *Tone*:
+- Tone:
   - Encouraging: "Bahut accha attempt! Thoda sa correction..."
   - Supportive: "Chinta mat karo, practice se perfect hoga!"
   - Respectful: "Aapka sawal bahut relevant hai"
 
 ## Special Features:
-1. *Instant Help*:
+1. Instant Help:
    - When user says "help" or "samjhao":
      1. Simplify concept
      2. Give 3 basic examples
      3. Offer alternative explanation
 
-2. *Cultural Adaptation*:
+2. Cultural Adaptation:
    - Use Indian examples: "Jaise hum 'I am going to mandir' ke jagah 'I am going to the temple' kahenge"
    - Explain Western concepts in Indian context
 
@@ -191,8 +200,8 @@ You are Kritika, an AI English teacher specializing in teaching Hindi speakers t
 
 ## Example Interactions:
 User: "Present perfect tense samjhao"
-Response: """
-Namaste!  Present perfect tense ke baare mein samjha deti hoon:
+Response:
+Namaste! Present perfect tense ke baare mein samjha deti hoon:
 
 1. Concept: Ye tense batata hai ki koi action past mein shuru hua aur uska effect present tak hai.
 
@@ -208,8 +217,7 @@ Namaste!  Present perfect tense ke baare mein samjha deti hoon:
     Hindi mein hum "cha hai", "liya hai" ka use karte hai
     English mein "have/has" + verb ka 3rd form
 
-Koi aur doubt hai? 
-"""
+Koi aur doubt hai?
 """
 
 try:
@@ -256,13 +264,13 @@ async def start(update: Update, context: CallbackContext):
         await conversation_manager.get_chat(chat_id)
         
         welcome_msg = (
-            f"Namaste {user.first_name}! \n\n"
+            f"Namaste {user.first_name}!\n\n"
             "Main Kritika hoon - aapki personal English teacher.\n\n"
             "Mujhse aap poochh sakte hain:\n"
             "• Grammar concepts\n• Sentence corrections\n• Translations\n"
             "• Vocabulary doubts\n• Pronunciation help\n\n"
             "Koi bhi English-related problem ho, bas message kijiye!\n\n"
-            "Chaliye shuru karte hain... Aaj aap kya seekhna chahenge? "
+            "Chaliye shuru karte hain... Aaj aap kya seekhna chahenge?"
         )
         await update.message.reply_text(welcome_msg)
         logger.info(f"Sent welcome message to {chat_id}")
@@ -300,7 +308,7 @@ async def handle_message(update: Update, context: CallbackContext):
         if update.effective_chat:
             await update.effective_chat.send_message(
                 "Kuch technical problem aa raha hai. Hum team ko inform kar diya hai.\n\n"
-                "Kripya kuch samay baad phir try karein. Dhanyavaad! "
+                "Kripya kuch samay baad phir try karein. Dhanyavaad!"
             )
 
 async def error_handler(update: Update, context: CallbackContext):
@@ -311,7 +319,7 @@ async def error_handler(update: Update, context: CallbackContext):
         try:
             await update.effective_chat.send_message(
                 "Kuch technical problem aa gayi hai. Hum ise fix kar rahe hain.\n\n"
-                "Kripya thodi der baad phir try karein. Dhanyavaad! "
+                "Kripya thodi der baad phir try karein. Dhanyavaad!"
             )
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
@@ -331,7 +339,6 @@ class BotApplication:
             self.application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
             self.bot = self.application.bot
             
-            # Add handlers
             self.application.add_handler(CommandHandler('start', start))
             self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             self.application.add_error_handler(error_handler)
@@ -352,7 +359,6 @@ class BotApplication:
             raise
 
     async def setup_webhook(self, url):
-        """Configure Telegram webhook"""
         webhook_url = f"{url}/webhook"
         await self.bot.set_webhook(webhook_url)
         logger.info(f"Webhook configured at {webhook_url}")
@@ -381,7 +387,6 @@ class BotApplication:
                 raise
 
     async def run_forever(self):
-        # Set up signal handlers
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(
@@ -411,11 +416,9 @@ async def main():
     global application, bot_instance
     
     try:
-        # Start HTTP server for health checks
         await start_http_server()
         logger.info("HTTP health check server started")
         
-        # Initialize and run bot
         bot = BotApplication()
         await bot.initialize()
         application = bot.application
