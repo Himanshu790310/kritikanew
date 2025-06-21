@@ -1,11 +1,22 @@
-runtime: python39
-service: english-teaching-bot
-entrypoint: python main.py
+runtime: python
+env: flex
+service: kritikanew1
 
-instance_class: F1
-automatic_scaling:
-  min_instances: 1
-  max_instances: 3
+runtime_config:
+  python_version: 3.11
+
+entrypoint: gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 120 --worker-class uvicorn.workers.UvicornWorker main:app
+
+manual_scaling:
+  instances: 1
+
+resources:
+  cpu: 1
+  memory_gb: 1
+  disk_size_gb: 10
 
 env_variables:
-  GOOGLE_CLOUD_PROJECT: your-project-id
+  TELEGRAM_BOT_TOKEN: "7833059587:AAGWCrFoYJqaIy51BHHRVtNrimJbZGTMows"
+  GOOGLE_API_KEY: "AIzaSyDc6wrTkV2k4AWl72NZxET6URrXCbM8haM"
+  WEBHOOK_URL: "https://kritikanew1-494584189423.europe-west1.run.app/webhook"
+  PORT: "8080"
