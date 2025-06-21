@@ -1,11 +1,12 @@
-# Ignore files not needed for deployment
 .git
 .gitignore
-.env
-__pycache__/
 *.pyc
 *.pyo
 *.pyd
-.DS_Store
-.env.local
+__pycache__/
+env/
+venv/
 *.env
+*.swp
+*.swo
+.DS_Store
