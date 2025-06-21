@@ -61,7 +61,7 @@ async def telegram_webhook(request: Request):
         return {"status": "error", "message": str(e)}, 500
 
 def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
 
 async def start_http_server():
     Thread(target=run_fastapi, daemon=True).start()
